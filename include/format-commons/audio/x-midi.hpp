@@ -27,12 +27,13 @@ namespace format::audio::x_midi {
     template<int V> using IntegralConstant = Constant<std::integral_constant<uint8_t, V>>;
 
     template<typename T, int S, int E>
-    auto PackedValue(T in) {
-        return Packed < T > {in}.template get<S, E>();
+    auto PackedValue(std::optional<T> in) {
+        return Packed < T > {in.value()}.template get<S, E>();
     }
 
     enum variables {
-        STATUS_BYTE
+        STATUS_BYTE = 0,
+        META_LENGTH
     };
 
     enum message_type_t {
@@ -63,6 +64,81 @@ namespace format::audio::x_midi {
         UNDEFINED_13,
         ACTIVE_SENSING,
         RESET
+    };
+
+    struct invalid_variable_length : public std::runtime_error {
+        explicit invalid_variable_length(const std::string &e) : std::runtime_error(e) {}
+    };
+
+    struct VariableLength {
+        FORMAT_HPP_TYPE(void)
+
+        template<typename F>
+        static uint32_t read_variable_length(F &input) {
+            uint32_t t = 0u;
+            uint8_t c;
+            uint8_t offset;
+            do {
+                input.read((char *) &c, 1);
+                if (input.eof()) {
+                    throw binary_eof();
+                }
+                t = t << 7u | c & 0x7Fu;
+                ++offset;
+                if (c & 0x80u && offset == 4)
+                    throw invalid_variable_length("variable length input exceeds maximum");
+            } while (c & 0x80u);
+            return t;
+        }
+
+        static auto write_variable_length(uint32_t input) {
+            if (input > 0x0fffffffu) {
+                throw invalid_variable_length(
+                        std::to_string(input) + std::string(" cannot be represented as variable length"));
+            }
+            uint32_t out = 0;
+            uint8_t offset = 0;
+            do {
+                out |= (input & 0x7fu) << offset;
+                input = input >> 7u;
+                if (offset > 0) {
+                    out |= (0x80u << offset);
+                }
+                if (input == 0) {
+                    break;
+                }
+                offset += 8u;
+            } while (true);
+            return std::make_tuple(out, 1 + offset / 8);
+        }
+
+        FORMAT_HPP_INTERFACE_DECL
+        {
+            FORMAT_HPP_INTERFACE
+            using Type = uint32_t;
+
+            void read() {
+                Type t;
+                read(t);
+            }
+
+            void read(Type &output) {
+                output = read_variable_length(processor);
+            }
+
+            void write() {}
+
+            void write(const Type &input) {
+                auto s = write_variable_length(input);
+                uint32_t out = std::get<0>(s);
+                auto size = std::get<1>(s);
+                const char* oc = reinterpret_cast<const char *>(&out);
+                for(int i = size - 1; i >= 0; --i) {
+                    processor.write(&oc[i], 1);
+                }
+            }
+        };
+
     };
 
     constexpr auto make_status_byte(unsigned type, unsigned channel) {
@@ -200,7 +276,23 @@ namespace format::audio::x_midi {
         }
     };
 
-    using system_message_t = std::variant<sysex_message_t, song_position_pointer_t, song_select_t, uint8_t>;
+    struct meta_event_t {
+        uint8_t type;
+        uint32_t length;
+        std::vector<char> bytes;
+        meta_event_t(uint8_t t, uint32_t l, char* c): type(t), length(l), bytes(length, 0) {
+            if(c) memcpy(bytes.data(), c, length);
+        }
+    };
+
+    using MetaEvent = Structure <meta_event_t,
+            O<offsetof(meta_event_t, type), Sc<uint8_t>>,
+            O<offsetof(meta_event_t, length), Copy<META_LENGTH, VariableLength>>,
+            O<offsetof(meta_event_t, bytes), FixedArray<Sc<uint8_t>, Get < META_LENGTH>>>
+    >;
+
+
+    using system_message_t = std::variant<sysex_message_t, song_position_pointer_t, song_select_t, meta_event_t, uint8_t>;
 
     struct midi_message_t {
         uint8_t status{};
@@ -255,6 +347,13 @@ namespace format::audio::x_midi {
     Case <IntegralConstant<SONG_SELECT>, SongSelect>,
     Default<Sc<void>>>;
 
+    using SystemMessageWithMeta = Switch <Call<&PackedValue<uint8_t, 0, 3>, Get < STATUS_BYTE>>,
+            Case <IntegralConstant<SYSEX_MESSAGE>, SystemExclusiveMessage>,
+            Case <IntegralConstant<SONG_POSITION_POINTER>, SongPositionPointer>,
+            Case <IntegralConstant<SONG_SELECT>, SongSelect>,
+            Case <IntegralConstant<RESET>, MetaEvent>,
+            Default<Sc<void>>>;
+
     using StatusByte = Copy <STATUS_BYTE, Sc<uint8_t>>;
     using RemainingMidiMessage =
     Switch <Call<&PackedValue<uint8_t, 4, 7>, Get < STATUS_BYTE>>,
@@ -267,8 +366,23 @@ namespace format::audio::x_midi {
     Case <IntegralConstant<PITCHWHEELCHANGE>, PitchWheelChange>,
     Case <IntegralConstant<SYSTEMMESSAGE>, SystemMessage>>;
 
+    using RemainingMidiMessageWithMeta =
+    Switch <Call<&PackedValue<uint8_t, 4, 7>, Get < STATUS_BYTE>>,
+            Case <IntegralConstant<NOTEOFF>, NoteOff>,
+            Case <IntegralConstant<NOTEON>, NoteOn>,
+            Case <IntegralConstant<POLYPHONICKEYPRESSURE>, PolyphonicKeyPressure>,
+            Case <IntegralConstant<CONTROLCHANGE>, ControlChange>,
+            Case <IntegralConstant<PROGRAMCHANGE>, ProgramChange>,
+            Case <IntegralConstant<CHANNELPRESSURE>, ChannelPressure>,
+            Case <IntegralConstant<PITCHWHEELCHANGE>, PitchWheelChange>,
+            Case <IntegralConstant<SYSTEMMESSAGE>, SystemMessageWithMeta>>;
+
+
     using MidiMessage = Structure <midi_message_t, O<offsetof(midi_message_t, status), StatusByte>, O<offsetof(
             midi_message_t, message), RemainingMidiMessage>>;
+
+    using MidiMessageWithMeta = Structure <midi_message_t, O<offsetof(midi_message_t, status), StatusByte>, O<offsetof(
+            midi_message_t, message), RemainingMidiMessageWithMeta>>;
 
     enum controller_t {
         BANK_SELECT_MSB = 0x00,

@@ -1083,6 +1083,16 @@ namespace format {
                 return C::value == cmp;
             }
 
+            template<typename Cmp>
+            static bool matches(const std::optional<Cmp> &cmp) {
+                return cmp.has_value() && matches(cmp.value());
+            }
+
+            template<typename Cmp>
+            static bool matches(const std::reference_wrapper<Cmp> &cmp) {
+                return cmp.get() == C::value;
+            }
+
             template<typename S1=Stack, std::enable_if_t<S1::IsReadStack, int> = 0>
             void read() {
                 typename T::template Interface<S>::Type tv;
@@ -1482,12 +1492,14 @@ namespace format {
     };
 
 /* Data Types */
+    struct BigEndian {};
+    struct LittleEndian {};
 
 /*!
  * \brief Read sizeof(T) bytes and cast to T.
  * \tparam T type to read
  */
-    template<typename T>
+    template<typename T, typename Endian = LittleEndian>
     struct Scalar {
         FORMAT_HPP_TYPE(void)
 
@@ -1521,9 +1533,19 @@ namespace format {
             /*!
              * \brief Write from variable.
              */
-            template<typename S1=Stack, std::enable_if_t<!S1::IsReadStack, int> = 0>
+            template<typename S1=Stack, typename E=Endian, std::enable_if_t<!S1::IsReadStack && std::is_same_v<E, LittleEndian>, int> = 0>
             void write(const T &input) {
                 processor.write(reinterpret_cast<const char *>(&input), sizeof(T));
+                if (processor.bad()) {
+                    throw binary_write_error();
+                }
+            }
+
+            template<typename S1=Stack, typename E=Endian, std::enable_if_t<!S1::IsReadStack && std::is_same_v<E, BigEndian>, int> = 0>
+            void write(const T &input) {
+                for(auto i = 0; i < sizeof(T); ++i) {
+                    processor.write(reinterpret_cast<const char *>(&input) + sizeof(T) - i - 1, 1);
+                }
                 if (processor.bad()) {
                     throw binary_write_error();
                 }

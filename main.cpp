@@ -16,6 +16,8 @@
  */
 #include <iostream>
 #include <memory>
+#include <fstream>
+#include <sstream>
 
 #include <csignal>
 
@@ -23,8 +25,10 @@
 #include <alsa/seq.h>
 
 #include <format-commons/audio/x-midi.hpp>
+#include <format-commons/audio/midi.hpp>
 
 using namespace format::audio::x_midi;
+using namespace format::audio::midi;
 
 #define UNIQ(x, y, name) std::unique_ptr<x, decltype(&y)>name(nullptr, y);
 
@@ -59,6 +63,55 @@ void oninterrupt(int h) {
     terminate = true;
 }
 
+using MessageVector = std::vector<event_t>;
+
+void savemessages(MessageVector &messages, int ppq) {
+    if (messages.empty()) return;
+    // null time
+    auto first_time = messages.front().delta;
+    for (auto &msg : messages) {
+        msg.delta -= first_time;
+    }
+    // end of track
+    messages.emplace_back(messages.back().delta + 1, midi_message_t(0xff, system_message_t(meta_event_end_of_track_t())));
+    // prepare output data
+    header_t::division_t division{
+            header_t::division_t::METRICAL,
+            header_t::metrical_time_t{static_cast<uint16_t>(ppq)}
+    };
+    chunk_t header{
+            HeaderType::value,
+            6,
+            header_t{
+                    header_t::MULTI_CHANNEL,
+                    1,
+                    header_t::division_t{
+                            header_t::division_t::METRICAL,
+                            header_t::metrical_time_t{
+                                static_cast<uint16_t>(ppq)
+                            }
+                    }
+            }
+    };
+    // get length of track in bytes
+    chunk_t track{
+            TrackType::value,
+            0,
+            messages
+    };
+    {
+        std::stringstream sf{};
+        format::Format<Chunk>::writer(sf).write(track);
+        track.length = sf.str().size() - strlen(TrackType::value) - 4;
+    }
+    // output
+    std::ofstream of("test.midi", std::ios_base::binary | std::ios_base::out);
+    format::Format<Chunk>::writer(of).write(header);
+    format::Format<Chunk>::writer(of).write(track);
+    of.close();
+    fprintf(stderr, "saved MIDI output\n");
+}
+
 int main(int argc, char **argv) {
     struct sigaction intaction{};
     memset(&intaction, 0, sizeof(struct sigaction));
@@ -74,12 +127,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (argc != 3) {
-        fprintf(stderr, "Usage: shadowmidi CLIENT PORT\n");
+    if (argc != 4) {
+        fprintf(stderr, "Usage: shadowmidi CLIENT PORT BREAK\n");
         return 1;
     }
     int clientno = int(strtol(argv[1], nullptr, 10));
     int portno = int(strtol(argv[2], nullptr, 10));
+    int min_break_time = int(strtol(argv[3], nullptr, 10));
     if (errno) {
         fprintf(stderr, "Could not read input arguments\n");
         return 1;
@@ -112,6 +166,7 @@ int main(int argc, char **argv) {
     snd_seq_queue_tempo_alloca(&tempo);
     int bpm = 100;
     int ppq = 48;
+    long vtempo = 60000000l / bpm;
     snd_seq_queue_tempo_set_tempo(tempo, 60000000l / bpm);
     snd_seq_queue_tempo_set_ppq(tempo, ppq);
     err = snd_seq_set_queue_tempo(client.get(), int(queue), tempo);
@@ -178,6 +233,11 @@ int main(int argc, char **argv) {
     snd_seq_queue_status_t *queue_status;
     snd_seq_queue_status_alloca(&queue_status);
 
+    MessageVector messages{};
+    messages.emplace_back(0, midi_message_t(0xff, meta_event_set_tempo_t(vtempo)));
+
+    long last_tick = 0;
+
     while (!terminate) {
         snd_seq_event_t *ev;
         auto size = snd_seq_event_input(client.get(), &ev);
@@ -188,15 +248,18 @@ int main(int argc, char **argv) {
             break;
         }
         if (!snd_seq_ev_is_tick(ev)) continue;
-        auto tick = ev->time.tick;
-        if (snd_seq_ev_is_reltime(ev)) {
-            err = snd_seq_get_queue_status(client.get(), int(queue), queue_status);
-            if (err < 0) {
-                fprintf(stderr, "could not get ALSA queue status\n");
-                return 1;
+        // check for break
+        if (!messages.empty()) {
+            auto tickSec = 100.0 / (bpm * ppq);
+            auto tick = ev->time.tick - last_tick;
+            auto delta = tickSec * double(tick) / 60;
+            if (delta > min_break_time) {
+                savemessages(messages, ppq);
+                messages.clear();
+                messages.emplace_back(tick, midi_message_t(0xff, meta_event_set_tempo_t(vtempo)));
             }
-            tick += snd_seq_queue_status_get_tick_time(queue_status);
         }
+        // process message
         bool process_msg = false;
         midi_message_t msg{};
         switch (ev->type) {
@@ -252,6 +315,12 @@ int main(int argc, char **argv) {
                 break;
         }
         if (!process_msg) continue;
+        auto tick = ev->time.tick - last_tick;
+        last_tick = ev->time.tick;
+        messages.emplace_back(tick, msg);
+    }
+    if(!messages.empty()) {
+        savemessages(messages, ppq);
     }
 
     return 0;
