@@ -1973,7 +1973,7 @@ namespace format {
             using Stack = typename T::template Interface<S>::Stack;
 
             template<typename St>
-            static const auto &value(const St &st) {
+            static auto value(const St &st) {
                 return (st.*Acc)();
             }
 

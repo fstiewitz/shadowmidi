@@ -287,31 +287,31 @@ int main(int argc, char **argv) {
                 process_msg = true;
                 fprintf(stderr, "program\n");
                 msg = midi_message_t(make_status_byte(PROGRAMCHANGE, ev->data.control.channel),
-                                     control_change_t(ev->data.control.param, ev->data.control.value));
+                                     program_change_t(ev->data.control.value));
                 break;
             case SND_SEQ_EVENT_CHANPRESS:
                 process_msg = true;
                 fprintf(stderr, "channel pressure\n");
                 msg = midi_message_t(make_status_byte(CHANNELPRESSURE, ev->data.control.channel),
-                                     control_change_t(ev->data.control.param, ev->data.control.value));
+                                     channel_pressure_t(ev->data.control.value));
                 break;
             case SND_SEQ_EVENT_PITCHBEND:
                 process_msg = true;
                 fprintf(stderr, "pitch wheel\n");
                 msg = midi_message_t(make_status_byte(PITCHWHEELCHANGE, ev->data.control.channel),
-                                     control_change_t(ev->data.control.param, ev->data.control.value));
+                                     pitch_wheel_change_t(ev->data.control.value));
                 break;
             case SND_SEQ_EVENT_SONGPOS:
                 process_msg = true;
                 fprintf(stderr, "song pos\n");
                 msg = midi_message_t(make_status_byte(SONG_POSITION_POINTER, ev->data.control.channel),
-                                     control_change_t(ev->data.control.param, ev->data.control.value));
+                                     song_position_pointer_t(ev->data.control.value));
                 break;
             case SND_SEQ_EVENT_SONGSEL:
                 process_msg = true;
                 fprintf(stderr, "song pos\n");
                 msg = midi_message_t(make_status_byte(SONG_SELECT, ev->data.control.channel),
-                                     control_change_t(ev->data.control.param, ev->data.control.value));
+                                     song_select_t(ev->data.control.value));
                 break;
         }
         if (!process_msg) continue;

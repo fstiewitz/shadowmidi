@@ -225,6 +225,7 @@ namespace format::audio::x_midi {
         uint16_t pitch_wheel;
 
         explicit pitch_wheel_change_t(uint8_t l, uint8_t m) : pitch_wheel((m << 8u) | l) {}
+        explicit pitch_wheel_change_t(uint16_t value): pitch_wheel(value) {}
 
         pitch_wheel_change_t() = default;
 
@@ -241,6 +242,7 @@ namespace format::audio::x_midi {
         uint16_t song_position;
 
         explicit song_position_pointer_t(uint8_t l, uint8_t m) : song_position((m << 8u) | l) {}
+        explicit song_position_pointer_t(uint16_t m) : song_position(m) {}
 
         song_position_pointer_t() = default;
 
