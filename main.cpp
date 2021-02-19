@@ -18,6 +18,7 @@
 #include <memory>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 
 #include <csignal>
 
@@ -70,7 +71,7 @@ void onusr1(int h) {
 
 using MessageVector = std::vector<event_t>;
 
-void savemessages(MessageVector &messages, int ppq) {
+void savemessages(MessageVector &messages, int ppq, std::filesystem::path name) {
     if (messages.size() <= 1) return;
     // null time
     messages.front().delta = 0;
@@ -107,15 +108,25 @@ void savemessages(MessageVector &messages, int ppq) {
         track.length = sf.str().size() - strlen(TrackType::value) - 4;
     }
     // output
-    std::ofstream of("test.midi", std::ios_base::binary | std::ios_base::out);
+    std::ofstream of(name, std::ios_base::binary | std::ios_base::out);
     format::Format<Chunk>::writer(of).write(header);
     format::Format<Chunk>::writer(of).write(track);
     of.close();
-    fprintf(stderr, "saved MIDI output\n");
+    fprintf(stderr, "saved MIDI output to %s\n", name.c_str());
 }
 
-void save(MessageVector &messages, int ppq, long tick, long vtempo) {
-    savemessages(messages, ppq);
+void save(MessageVector &messages, int ppq, long tick, long vtempo, std::filesystem::path folder) {
+    char buffer[128];
+    std::time_t ts = std::time(nullptr);
+    auto ts_local = std::localtime(&ts);
+    snprintf(buffer, 128, "%04u-%02u-%02u %02u.%02u.%02u.midi",
+             ts_local->tm_year + 1900,
+             ts_local->tm_mon + 1,
+             ts_local->tm_yday + 1,
+             ts_local->tm_hour + 1,
+             ts_local->tm_min + 1,
+             ts_local->tm_sec + 1);
+    savemessages(messages, ppq, folder / buffer);
     messages.clear();
     messages.emplace_back(tick, midi_message_t(0xff, meta_event_set_tempo_t(vtempo)));
 }
@@ -144,17 +155,20 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (argc != 4) {
-        fprintf(stderr, "Usage: shadowmidi CLIENT PORT BREAK\n");
+    if (argc != 5) {
+        fprintf(stderr, "Usage: shadowmidi CLIENT PORT BREAK OUTPATH\n");
         return 1;
     }
     int clientno = int(strtol(argv[1], nullptr, 10));
     int portno = int(strtol(argv[2], nullptr, 10));
     int min_break_time = int(strtol(argv[3], nullptr, 10));
+    auto outpath = std::filesystem::path(argv[4]);
     if (errno) {
         fprintf(stderr, "Could not read input arguments\n");
         return 1;
     }
+
+    std::filesystem::create_directories(outpath);
 
     UNIQ(snd_seq_t, snd_seq_close, client);
     snd_seq_t *handle;
@@ -276,7 +290,7 @@ int main(int argc, char **argv) {
             if (delta > min_break_time || should_save) {
                 should_save = false;
                 last_tick = ev->time.tick;
-                save(messages, ppq, tick, vtempo);
+                save(messages, ppq, tick, vtempo, outpath);
             }
         }
         // process message
@@ -340,7 +354,7 @@ int main(int argc, char **argv) {
         messages.emplace_back(tick, msg);
     }
     if(!messages.empty()) {
-        savemessages(messages, ppq);
+        save(messages, ppq, 0, 0, outpath);
     }
 
     return 0;
