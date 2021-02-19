@@ -58,20 +58,22 @@ public:
 };
 
 bool terminate = false;
+bool should_save = false;
 
 void oninterrupt(int h) {
     terminate = true;
 }
 
+void onusr1(int h) {
+    should_save = true;
+}
+
 using MessageVector = std::vector<event_t>;
 
 void savemessages(MessageVector &messages, int ppq) {
-    if (messages.empty()) return;
+    if (messages.size() <= 1) return;
     // null time
-    auto first_time = messages.front().delta;
-    for (auto &msg : messages) {
-        msg.delta -= first_time;
-    }
+    messages.front().delta = 0;
     // end of track
     messages.emplace_back(messages.back().delta + 1, midi_message_t(0xff, system_message_t(meta_event_end_of_track_t())));
     // prepare output data
@@ -112,18 +114,33 @@ void savemessages(MessageVector &messages, int ppq) {
     fprintf(stderr, "saved MIDI output\n");
 }
 
+void save(MessageVector &messages, int ppq, long tick, long vtempo) {
+    savemessages(messages, ppq);
+    messages.clear();
+    messages.emplace_back(tick, midi_message_t(0xff, meta_event_set_tempo_t(vtempo)));
+}
+
 int main(int argc, char **argv) {
     struct sigaction intaction{};
+    struct sigaction usr1action{};
     memset(&intaction, 0, sizeof(struct sigaction));
+    memset(&usr1action, 0, sizeof(struct sigaction));
     sigemptyset(&intaction.sa_mask);
+    sigemptyset(&usr1action.sa_mask);
     intaction.sa_handler = oninterrupt;
     intaction.sa_flags = 0;
+    usr1action.sa_handler = onusr1;
+    usr1action.sa_flags = 0;
     if (sigaction(SIGINT, &intaction, nullptr) == -1) {
-        perror("sigaction");
+        perror("sigaction SIGINT");
         return 1;
     }
     if (sigaction(SIGTERM, &intaction, nullptr) == -1) {
-        perror("sigaction");
+        perror("sigaction SIGTERM");
+        return 1;
+    }
+    if (sigaction(SIGUSR1, &usr1action, nullptr) == -1) {
+        perror("sigaction SIGUSR1");
         return 1;
     }
 
@@ -242,7 +259,10 @@ int main(int argc, char **argv) {
         snd_seq_event_t *ev;
         auto size = snd_seq_event_input(client.get(), &ev);
         if (size == -ENOSPC) continue;
-        if (size == -EINTR) break;
+        if (size == -EINTR) {
+            if(terminate) break;
+            continue;
+        }
         if (size < 0) {
             fprintf(stderr, "ALSA event has unexpected return value (%s)\n", snd_strerror(size));
             break;
@@ -253,10 +273,10 @@ int main(int argc, char **argv) {
             auto tickSec = 100.0 / (bpm * ppq);
             auto tick = ev->time.tick - last_tick;
             auto delta = tickSec * double(tick) / 60;
-            if (delta > min_break_time) {
-                savemessages(messages, ppq);
-                messages.clear();
-                messages.emplace_back(tick, midi_message_t(0xff, meta_event_set_tempo_t(vtempo)));
+            if (delta > min_break_time || should_save) {
+                should_save = false;
+                last_tick = ev->time.tick;
+                save(messages, ppq, tick, vtempo);
             }
         }
         // process message
