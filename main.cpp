@@ -71,7 +71,7 @@ void onusr1(int h) {
 
 using MessageVector = std::vector<event_t>;
 
-void savemessages(MessageVector &messages, int ppq, std::filesystem::path name) {
+void savemessages(MessageVector &messages, int ppq, const std::filesystem::path& name) {
     if (messages.size() <= 1) return;
     // null time
     messages.front().delta = 0;
@@ -113,9 +113,11 @@ void savemessages(MessageVector &messages, int ppq, std::filesystem::path name) 
     format::Format<Chunk>::writer(of).write(track);
     of.close();
     fprintf(stderr, "saved MIDI output to %s\n", name.c_str());
+    printf("recording stopped\n");
+    fflush(stdout);
 }
 
-void save(MessageVector &messages, int ppq, long tick, long vtempo, std::filesystem::path folder) {
+void save(MessageVector &messages, int ppq, long tick, long vtempo, const std::filesystem::path& folder) {
     char buffer[128];
     std::time_t ts = std::time(nullptr);
     auto ts_local = std::localtime(&ts);
@@ -352,6 +354,10 @@ int main(int argc, char **argv) {
         auto tick = ev->time.tick - last_tick;
         last_tick = ev->time.tick;
         messages.emplace_back(tick, msg);
+        if(messages.size() == 2) {
+            printf("recording started\n");
+            fflush(stdout);
+        }
     }
     if(!messages.empty()) {
         save(messages, ppq, 0, 0, outpath);
