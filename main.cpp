@@ -71,12 +71,24 @@ void onusr1(int h) {
 
 using MessageVector = std::vector<event_t>;
 
-void savemessages(MessageVector &messages, int ppq, const std::filesystem::path& name) {
-    if (messages.size() <= 1) return;
+bool has_a_note(const MessageVector &messages) {
+    return std::any_of(messages.begin(), messages.end(), [](const auto &msg) {
+        switch (status_get_type(msg.message.status)) {
+            case NOTEON:
+            case NOTEOFF:
+                return true;
+        }
+        return false;
+    });
+}
+
+void savemessages(MessageVector &messages, int ppq, const std::filesystem::path &name) {
+    if (!has_a_note(messages)) return;
     // null time
     messages.front().delta = 0;
     // end of track
-    messages.emplace_back(messages.back().delta + 1, midi_message_t(0xff, system_message_t(meta_event_end_of_track_t())));
+    messages.emplace_back(messages.back().delta + 1,
+                          midi_message_t(0xff, system_message_t(meta_event_end_of_track_t())));
     // prepare output data
     header_t::division_t division{
             header_t::division_t::METRICAL,
@@ -91,7 +103,7 @@ void savemessages(MessageVector &messages, int ppq, const std::filesystem::path&
                     header_t::division_t{
                             header_t::division_t::METRICAL,
                             header_t::metrical_time_t{
-                                static_cast<uint16_t>(ppq)
+                                    static_cast<uint16_t>(ppq)
                             }
                     }
             }
@@ -117,7 +129,7 @@ void savemessages(MessageVector &messages, int ppq, const std::filesystem::path&
     fflush(stdout);
 }
 
-void save(MessageVector &messages, int ppq, long tick, long vtempo, const std::filesystem::path& folder) {
+void save(MessageVector &messages, int ppq, long tick, long vtempo, const std::filesystem::path &folder) {
     char buffer[128];
     std::time_t ts = std::time(nullptr);
     auto ts_local = std::localtime(&ts);
@@ -276,7 +288,7 @@ int main(int argc, char **argv) {
         auto size = snd_seq_event_input(client.get(), &ev);
         if (size == -ENOSPC) continue;
         if (size == -EINTR) {
-            if(terminate) break;
+            if (terminate) break;
             continue;
         }
         if (size < 0) {
@@ -285,7 +297,7 @@ int main(int argc, char **argv) {
         }
         if (!snd_seq_ev_is_tick(ev)) continue;
         // check for break
-        if (!messages.empty()) {
+        if (has_a_note(messages)) {
             auto tickSec = 100.0 / (bpm * ppq);
             auto tick = ev->time.tick - last_tick;
             auto delta = tickSec * double(tick) / 60;
@@ -354,12 +366,12 @@ int main(int argc, char **argv) {
         auto tick = ev->time.tick - last_tick;
         last_tick = ev->time.tick;
         messages.emplace_back(tick, msg);
-        if(messages.size() == 2) {
+        if (messages.size() == 2) {
             printf("recording started\n");
             fflush(stdout);
         }
     }
-    if(!messages.empty()) {
+    if (has_a_note(messages)) {
         save(messages, ppq, 0, 0, outpath);
     }
 
