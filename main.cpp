@@ -17,7 +17,6 @@
 #include <iostream>
 #include <memory>
 #include <fstream>
-#include <sstream>
 #include <filesystem>
 
 #include <csignal>
