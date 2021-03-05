@@ -85,6 +85,7 @@ void savemessages(MessageVector &messages, int ppq, const std::filesystem::path 
     if (!has_a_note(messages)) return;
     // null time
     messages.front().delta = 0;
+    messages[1].delta = 0;
     // end of track
     messages.emplace_back(messages.back().delta + 1,
                           midi_message_t(0xff, system_message_t(meta_event_end_of_track_t())));
@@ -135,7 +136,7 @@ void save(MessageVector &messages, int ppq, long tick, long vtempo, const std::f
     snprintf(buffer, 128, "%04u-%02u-%02u %02u.%02u.%02u.midi",
              ts_local->tm_year + 1900,
              ts_local->tm_mon + 1,
-             ts_local->tm_yday + 1,
+             ts_local->tm_mday,
              ts_local->tm_hour + 1,
              ts_local->tm_min + 1,
              ts_local->tm_sec + 1);
